@@ -13,6 +13,31 @@ repo_root = Path(__file__).parent
 main_req_file = repo_root / "requirements.txt"
 
 
+def fix_scikit_image_numpy_compatibility():
+    """
+    Fix numpy/scikit-image binary incompatibility.
+    
+    When albumentations or other packages install a pre-built scikit-image wheel,
+    it may be compiled against numpy 2.x while the main WebUI requires numpy 1.x.
+    This causes a ValueError about dtype size mismatch.
+    
+    Solution: Force reinstall scikit-image with --no-binary to compile against
+    the currently installed numpy, or install a version known to be compatible.
+    """
+    try:
+        # Check if there's a numpy/skimage compatibility issue
+        numpy_version = get_installed_version("numpy")
+        if numpy_version and parse(numpy_version) < parse("2.0.0"):
+            # We have numpy 1.x, need scikit-image compiled for numpy 1.x
+            # Force reinstall scikit-image to ensure binary compatibility
+            launch.run_pip(
+                'install --force-reinstall --no-cache-dir "scikit-image==0.21.0"',
+                "sd-webui-controlnet: fixing scikit-image/numpy binary compatibility",
+            )
+    except Exception as e:
+        print(f"Warning: Failed to fix scikit-image compatibility: {e}")
+
+
 def get_installed_version(package: str) -> Optional[str]:
     try:
         return metadata.version(package)
@@ -189,3 +214,7 @@ try_install_from_wheel(
     ),
 )
 try_remove_legacy_submodule()
+
+# Fix scikit-image/numpy binary compatibility after all other packages are installed
+# This must run LAST to ensure scikit-image is compatible with the installed numpy version
+fix_scikit_image_numpy_compatibility()
