@@ -13,31 +13,93 @@ repo_root = Path(__file__).parent
 main_req_file = repo_root / "requirements.txt"
 
 
+def check_skimage_numpy_compatibility():
+    """
+    Test if scikit-image is compatible with the installed numpy.
+    Returns True if compatible, False if there's a binary incompatibility.
+    """
+    try:
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, "-c", "from skimage._shared import geometry; print('OK')"],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        return result.returncode == 0 and "OK" in result.stdout
+    except Exception:
+        return True  # Assume OK if we can't test
+
+
 def fix_scikit_image_numpy_compatibility():
     """
     Fix numpy/scikit-image binary incompatibility.
     
-    When albumentations or other packages install a pre-built scikit-image wheel,
-    it may be compiled against numpy 2.x while the main WebUI requires numpy 1.x.
-    This causes a ValueError about dtype size mismatch (Expected 96, got 88).
+    When packages install a pre-built scikit-image wheel, it may be compiled 
+    against numpy 2.x while the main WebUI requires numpy 1.x.
+    This causes: ValueError: numpy.dtype size changed (Expected 96, got 88).
     
-    Solution: Force reinstall scikit-image from source using --no-binary flag,
-    which compiles against the currently installed numpy version.
+    Solution: Use scikit-image 0.19.0 which only has numpy 1.x compatible wheels.
     """
+    print("sd-webui-controlnet: Checking scikit-image/numpy compatibility...")
+    
+    if check_skimage_numpy_compatibility():
+        print("sd-webui-controlnet: scikit-image/numpy compatibility OK.")
+        return
+    
+    print("sd-webui-controlnet: INCOMPATIBILITY DETECTED! Fixing...")
+    print("sd-webui-controlnet: Installing scikit-image 0.19.0 (numpy 1.x compatible)...")
+    
+    import subprocess
+    
     try:
-        numpy_version = get_installed_version("numpy")
-        if numpy_version and parse(numpy_version) < parse("2.0.0"):
-            # We have numpy 1.x, need scikit-image compiled for numpy 1.x
-            # Use --no-binary to force compilation from source against current numpy
-            print("sd-webui-controlnet: Fixing scikit-image/numpy binary compatibility...")
-            launch.run_pip(
-                'install --force-reinstall --no-cache-dir --no-binary scikit-image "scikit-image==0.21.0"',
-                "sd-webui-controlnet: rebuilding scikit-image for numpy 1.x compatibility",
-            )
-            print("sd-webui-controlnet: scikit-image compatibility fix applied.")
+        # Step 1: Uninstall scikit-image completely
+        print("sd-webui-controlnet: Step 1/3 - Removing incompatible scikit-image...")
+        subprocess.run([sys.executable, "-m", "pip", "uninstall", "scikit-image", "-y"], check=False)
+        
+        # Step 2: Ensure numpy 1.26.0 is installed
+        print("sd-webui-controlnet: Step 2/3 - Installing numpy 1.26.0...")
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--no-cache-dir", "numpy==1.26.0"],
+            check=False
+        )
+        
+        # Step 3: Install scikit-image 0.19.0 which only has numpy 1.x wheels
+        print("sd-webui-controlnet: Step 3/3 - Installing scikit-image 0.19.0...")
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--no-cache-dir", "scikit-image==0.19.0"],
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
+            print(f"pip output: {result.stdout}\n{result.stderr}")
+            raise Exception("pip install failed")
+        
+        # Verify fix worked
+        if check_skimage_numpy_compatibility():
+            print("sd-webui-controlnet: SUCCESS! scikit-image/numpy compatibility fixed.")
+        else:
+            raise Exception("Fix did not resolve the incompatibility")
+            
     except Exception as e:
-        print(f"Warning: Failed to fix scikit-image compatibility: {e}")
-        print("You may need to manually run: pip install --force-reinstall --no-binary scikit-image scikit-image==0.21.0")
+        print(f"ERROR: Automatic fix failed: {e}")
+        print("")
+        print("=" * 60)
+        print("MANUAL FIX REQUIRED:")
+        print("=" * 60)
+        print("Run these commands in your terminal:")
+        print("")
+        webui_root = repo_root.parent.parent
+        if platform.system() == "Windows":
+            print(f'  cd "{webui_root}"')
+            print(f'  .\\venv\\Scripts\\pip.exe uninstall scikit-image -y')
+            print(f'  .\\venv\\Scripts\\pip.exe install numpy==1.26.0 scikit-image==0.19.0')
+        else:
+            print(f'  cd "{webui_root}"')
+            print(f'  ./venv/bin/pip uninstall scikit-image -y')
+            print(f'  ./venv/bin/pip install numpy==1.26.0 scikit-image==0.19.0')
+        print("")
+        print("=" * 60)
 
 
 def get_installed_version(package: str) -> Optional[str]:
@@ -123,7 +185,7 @@ def try_install_from_wheel(pkg_name: str, wheel_url: str, version: Optional[str]
 
     try:
         launch.run_pip(
-            f"install -U {wheel_url}",
+            f"install --no-deps -U {wheel_url}",
             f"sd-webui-controlnet requirement: {pkg_name}",
         )
     except Exception as e:
@@ -219,4 +281,4 @@ try_remove_legacy_submodule()
 
 # Fix scikit-image/numpy binary compatibility after all other packages are installed
 # This must run LAST to ensure scikit-image is compatible with the installed numpy version
-fix_scikit_image_numpy_compatibility()
+# fix_scikit_image_numpy_compatibility()
